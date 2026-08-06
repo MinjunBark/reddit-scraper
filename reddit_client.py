@@ -96,12 +96,15 @@ def estimate_cost(max_items):
     return max_items * config.COST_PER_RESULT_USD + config.COST_PER_START_USD
 
 
-def fetch_recent_posts(max_items=None):
+def fetch_recent_posts(max_items=None, time_filter=None):
     """Run the Apify actor over config.SUBREDDITS and return normalized post dicts.
 
     `max_items` is a hard cap on TOTAL results across all subreddits, because that is the
     unit Apify bills on. Left unset, it defaults to POSTS_PER_SUBREDDIT per subreddit.
+    `time_filter` widens the lookback window (hour/day/week/month/year) — "day" suits the
+    daily cadence, but a wider window is useful for backfills and testing.
     """
+    time_filter = time_filter or config.TIME_FILTER
     if max_items is None:
         max_items = config.POSTS_PER_SUBREDDIT * len(config.SUBREDDITS)
         per_sub = config.POSTS_PER_SUBREDDIT
@@ -117,7 +120,7 @@ def fetch_recent_posts(max_items=None):
         # Lowercase is required — the actor's docs show display labels ("New"), not the
         # accepted values. Valid: "", relevance, hot, top, new, rising, comments.
         "sort": "new",
-        "time": config.TIME_FILTER,
+        "time": time_filter,
         "maxItems": max_items,
         "maxPostCount": per_sub,
         "maxComments": 0,
@@ -129,8 +132,8 @@ def fetch_recent_posts(max_items=None):
     }
 
     log.info(
-        "Starting Apify actor %s — capped at %d results, max cost ~$%.3f (takes 1-2 min)",
-        config.APIFY_ACTOR, max_items, estimate_cost(max_items),
+        "Starting Apify actor %s — window=%s, capped at %d results, max cost ~$%.3f (takes 1-2 min)",
+        config.APIFY_ACTOR, time_filter, max_items, estimate_cost(max_items),
     )
     run = client.actor(config.APIFY_ACTOR).call(
         run_input=run_input,

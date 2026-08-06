@@ -3,6 +3,7 @@
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 import requests
 
@@ -46,7 +47,7 @@ def _embed(post):
     if is_most_relevant(post):
         title = f"🔥 {title}"
 
-    return {
+    embed = {
         "title": title[:256],
         "url": post["permalink"],
         "description": description[:MAX_DESCRIPTION_CHARS],
@@ -58,11 +59,21 @@ def _embed(post):
         },
     }
 
+    # Discord renders this next to the footer in each viewer's own timezone, which beats
+    # baking one timezone into the text. Shows when the post was made, not when we ran.
+    posted_at = post.get("created_utc")
+    if posted_at:
+        embed["timestamp"] = (
+            datetime.fromtimestamp(posted_at, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+    return embed
+
 
 def build_digest(posts):
     """Return a list of webhook payloads (chunked to Discord's 10-embed limit)."""
+    today = datetime.now(timezone.utc).strftime("%b %-d, %Y")
     if not posts:
-        return [{"content": "**Reddit intent digest** — no matching posts today."}]
+        return [{"content": f"**Reddit intent digest · {today}** — no matching posts today."}]
 
     ordered = sort_for_digest(posts)
     embeds = [_embed(p) for p in ordered]
@@ -73,7 +84,7 @@ def build_digest(posts):
         payload = {"embeds": chunk}
         if i == 0:
             payload["content"] = (
-                f"**Reddit intent digest** — {len(ordered)} post"
+                f"**Reddit intent digest · {today}** — {len(ordered)} post"
                 f"{'s' if len(ordered) != 1 else ''} worth a look. 🔥 = highest signal."
             )
         payloads.append(payload)

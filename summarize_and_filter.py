@@ -168,16 +168,25 @@ def _evaluate_batch(client, batch):
             }
         except Exception as error:
             last_error = error
-            if "RESOURCE_EXHAUSTED" not in str(error) and "429" not in str(error):
+            # 429 = quota, 503 = transient overload. Both clear on their own; anything
+            # else is a real fault and should surface immediately rather than be retried.
+            text = str(error)
+            retryable = any(
+                marker in text
+                for marker in ("RESOURCE_EXHAUSTED", "429", "UNAVAILABLE", "503")
+            )
+            if not retryable:
                 raise
             delay = _retry_delay_from(error, attempt)
             log.warning(
-                "Gemini rate limit hit (attempt %d/%d), waiting %ds",
-                attempt + 1, config.GEMINI_MAX_RETRIES, delay,
+                "Gemini unavailable (attempt %d/%d), waiting %ds: %s",
+                attempt + 1, config.GEMINI_MAX_RETRIES, delay, text[:80],
             )
             time.sleep(delay)
 
-    raise RuntimeError(f"Gemini rate limit not cleared after {config.GEMINI_MAX_RETRIES} attempts") from last_error
+    raise RuntimeError(
+        f"Gemini did not recover after {config.GEMINI_MAX_RETRIES} attempts"
+    ) from last_error
 
 
 def summarize_and_filter(posts):
