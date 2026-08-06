@@ -18,9 +18,20 @@ Credentials needed (all free, see `.env.example` for where each comes from):
 
 | Var | Source |
 |---|---|
-| `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | a **script**-type app at https://www.reddit.com/prefs/apps |
+| `APIFY_TOKEN` | https://console.apify.com/settings/integrations → Personal API tokens |
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
 | `DISCORD_WEBHOOK_URL` | target channel → Integrations → Webhooks → New Webhook |
+
+### Why Apify and not Reddit's API
+
+`BUILD-INSTRUCTIONS.md` §2 specifies PRAW against Reddit's official API. That is no longer
+available: under Reddit's Responsible Builder Policy, self-service app creation is closed and new
+credentials require manual approval. Posts are therefore sourced through the Apify actor
+`trudax/reddit-scraper-lite`.
+
+Note that Reddit's Public Content Policy requires an agreement for commercial use of Reddit content
+regardless of how it is fetched. That question is not resolved by using Apify — it is a business
+decision recorded here so it isn't rediscovered later.
 
 ## Running
 
@@ -36,7 +47,7 @@ python main.py                        # real run: posts the digest, records what
 | File | Role |
 |---|---|
 | `config.py` | The only place Shadowfax-specific values live — subreddits, pain points, model |
-| `reddit_client.py` | PRAW, read-only, official API (not scraping) |
+| `reddit_client.py` | Runs the Apify actor, normalizes results. **The only source-aware module** |
 | `seen_store.py` | SQLite record of already-sent post IDs |
 | `summarize_and_filter.py` | One Gemini call per post → summary, matched pain points, recommendation |
 | `discord_delivery.py` | Builds embeds, chunks to Discord's 10-embed limit, POSTs |
@@ -51,6 +62,12 @@ Two ordering rules matter:
 
 If zero posts match, the digest still sends a short "no matching posts today" message. An explicit
 "ran, found nothing" is what distinguishes a working job from a broken one.
+
+## Cost
+
+Apify bills per result stored — about **$3.40 / 1,000 results**. At 25 posts × 2 subreddits daily
+that is roughly **$5/month**, and `TIME_FILTER = "day"` in `config.py` keeps it there by not
+re-fetching posts already processed. Gemini usage sits inside the free tier at this volume.
 
 ## Deployment
 

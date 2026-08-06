@@ -1,13 +1,14 @@
-"""PRAW setup and recent-post fetching.
+"""Fetches recent subreddit posts via the Apify actor `trudax/reddit-scraper-lite`.
 
-Uses Reddit's official API (application-only read-only OAuth), not HTML scraping — see
-BUILD-INSTRUCTIONS.md section 7.
+This is the only module that knows where posts come from. It returns the same normalized
+dicts regardless of source, so dedup / scoring / delivery are unaffected by this swap.
 """
 
 import logging
 import os
+from datetime import datetime, timezone
 
-import praw
+from apify_client import ApifyClient
 
 import config
 
@@ -15,58 +16,102 @@ log = logging.getLogger(__name__)
 
 
 def _client():
-    missing = [
-        name
-        for name in ("REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USER_AGENT")
-        if not os.environ.get(name)
-    ]
-    if missing:
-        raise RuntimeError(f"Missing required env vars: {', '.join(missing)}")
-
-    reddit = praw.Reddit(
-        client_id=os.environ["REDDIT_CLIENT_ID"],
-        client_secret=os.environ["REDDIT_CLIENT_SECRET"],
-        user_agent=os.environ["REDDIT_USER_AGENT"],
-    )
-    if not reddit.read_only:
-        log.warning("Reddit client is not in read-only mode; this pipeline never writes.")
-    return reddit
+    token = os.environ.get("APIFY_TOKEN")
+    if not token:
+        raise RuntimeError("Missing required env var: APIFY_TOKEN")
+    return ApifyClient(token)
 
 
-def _normalize(submission, subreddit_name):
+def _to_epoch(value):
+    """Apify returns ISO-8601 timestamps; downstream sorting needs a float."""
+    if not value:
+        return 0.0
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        log.warning("Unparseable createdAt: %r", value)
+        return 0.0
+
+
+def _subreddit_of(item):
+    """Prefer the actor's community field; fall back to parsing the URL."""
+    name = item.get("parsedCommunityName") or item.get("communityName") or ""
+    name = name.removeprefix("r/")
+    if name:
+        return name
+    url = item.get("url", "")
+    if "/r/" in url:
+        return url.split("/r/", 1)[1].split("/", 1)[0]
+    return "unknown"
+
+
+def _normalize(item):
     return {
-        "id": submission.id,
-        "subreddit": subreddit_name,
-        "title": submission.title,
-        "selftext": submission.selftext or "",
-        "permalink": f"https://www.reddit.com{submission.permalink}",
-        "created_utc": submission.created_utc,
-        "author": str(submission.author) if submission.author else "[deleted]",
-        "score": submission.score,
+        "id": item.get("parsedId") or item.get("id"),
+        "subreddit": _subreddit_of(item),
+        "title": item.get("title") or "",
+        "selftext": item.get("body") or "",
+        "permalink": item.get("url") or "",
+        "created_utc": _to_epoch(item.get("createdAt")),
+        "author": item.get("username") or "[deleted]",
+        "score": item.get("upVotes") or 0,
     }
 
 
+def _is_wanted(item):
+    """Keep real posts only — drop comments, ads, and NSFW."""
+    data_type = item.get("dataType")
+    if data_type and data_type != "post":
+        return False
+    if item.get("isAd"):
+        return False
+    if item.get("over18"):
+        return False
+    return bool(item.get("title"))
+
+
 def fetch_recent_posts(limit=None):
-    """Return the newest posts across config.SUBREDDITS as normalized dicts.
-
-    A subreddit that fails is logged and skipped rather than killing the run — one dead
-    subreddit shouldn't cost us the other's posts.
-    """
+    """Run the Apify actor over config.SUBREDDITS and return normalized post dicts."""
     per_sub = limit or config.POSTS_PER_SUBREDDIT
-    reddit = _client()
-    posts = []
+    client = _client()
 
+    run_input = {
+        "startUrls": [
+            {"url": f"https://www.reddit.com/r/{name}/new/"} for name in config.SUBREDDITS
+        ],
+        "sort": "New",
+        "time": config.TIME_FILTER,
+        "maxItems": per_sub * len(config.SUBREDDITS),
+        "maxPostCount": per_sub,
+        "maxComments": 0,
+        "skipComments": True,
+        "skipUserPosts": True,
+        "skipCommunity": True,
+        "includeNSFW": False,
+        "proxy": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
+    }
+
+    log.info("Starting Apify actor %s (this typically takes 1-2 minutes)", config.APIFY_ACTOR)
+    run = client.actor(config.APIFY_ACTOR).call(run_input=run_input)
+
+    status = run.get("status")
+    if status != "SUCCEEDED":
+        raise RuntimeError(
+            f"Apify run finished with status {status!r} — see "
+            f"https://console.apify.com/actors/runs/{run.get('id')}"
+        )
+
+    raw = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    posts = [_normalize(item) for item in raw if _is_wanted(item)]
+    posts = [p for p in posts if p["id"]]
+
+    log.info("Apify returned %d items, %d usable posts", len(raw), len(posts))
     for name in config.SUBREDDITS:
-        try:
-            fetched = [_normalize(s, name) for s in reddit.subreddit(name).new(limit=per_sub)]
-        except Exception:
-            log.exception("Failed to fetch r/%s", name)
-            continue
-
-        if not fetched:
-            # Indistinguishable from "quiet subreddit" downstream, so say it loudly here.
-            log.warning("r/%s returned zero posts — check the subreddit name and API access.", name)
-        log.info("Fetched %d posts from r/%s", len(fetched), name)
-        posts.extend(fetched)
+        count = sum(1 for p in posts if p["subreddit"].lower() == name.lower())
+        if count == 0:
+            # Looks identical to "quiet subreddit" downstream, so say it loudly here.
+            log.warning("Zero posts for r/%s — check the subreddit name and the actor run.", name)
+        else:
+            log.info("r/%s: %d posts", name, count)
 
     return posts

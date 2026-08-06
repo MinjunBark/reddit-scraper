@@ -39,7 +39,7 @@ def check_env(dry_run):
     Without this, a missing webhook URL only surfaces at the delivery step — by which point
     every post has already been fetched and scored.
     """
-    required = ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USER_AGENT", "GEMINI_API_KEY"]
+    required = ["APIFY_TOKEN", "GEMINI_API_KEY"]
     if not dry_run:
         required.append("DISCORD_WEBHOOK_URL")
     missing = [name for name in required if not os.environ.get(name)]
