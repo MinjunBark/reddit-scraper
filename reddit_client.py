@@ -70,9 +70,23 @@ def _is_wanted(item):
     return bool(item.get("title"))
 
 
-def fetch_recent_posts(limit=None):
-    """Run the Apify actor over config.SUBREDDITS and return normalized post dicts."""
-    per_sub = limit or config.POSTS_PER_SUBREDDIT
+def estimate_cost(max_items):
+    """Worst-case USD for one run: every capped result stored, plus the start fee."""
+    return max_items * config.COST_PER_RESULT_USD + config.COST_PER_START_USD
+
+
+def fetch_recent_posts(max_items=None):
+    """Run the Apify actor over config.SUBREDDITS and return normalized post dicts.
+
+    `max_items` is a hard cap on TOTAL results across all subreddits, because that is the
+    unit Apify bills on. Left unset, it defaults to POSTS_PER_SUBREDDIT per subreddit.
+    """
+    if max_items is None:
+        max_items = config.POSTS_PER_SUBREDDIT * len(config.SUBREDDITS)
+        per_sub = config.POSTS_PER_SUBREDDIT
+    else:
+        per_sub = max_items
+
     client = _client()
 
     run_input = {
@@ -81,7 +95,7 @@ def fetch_recent_posts(limit=None):
         ],
         "sort": "New",
         "time": config.TIME_FILTER,
-        "maxItems": per_sub * len(config.SUBREDDITS),
+        "maxItems": max_items,
         "maxPostCount": per_sub,
         "maxComments": 0,
         "skipComments": True,
@@ -91,8 +105,14 @@ def fetch_recent_posts(limit=None):
         "proxy": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
     }
 
-    log.info("Starting Apify actor %s (this typically takes 1-2 minutes)", config.APIFY_ACTOR)
-    run = client.actor(config.APIFY_ACTOR).call(run_input=run_input)
+    log.info(
+        "Starting Apify actor %s — capped at %d results, max cost ~$%.3f (takes 1-2 min)",
+        config.APIFY_ACTOR, max_items, estimate_cost(max_items),
+    )
+    run = client.actor(config.APIFY_ACTOR).call(
+        run_input=run_input,
+        memory_mbytes=config.APIFY_MEMORY_MBYTES,
+    )
 
     status = run.get("status")
     if status != "SUCCEEDED":

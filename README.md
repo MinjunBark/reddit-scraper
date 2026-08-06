@@ -65,9 +65,24 @@ If zero posts match, the digest still sends a short "no matching posts today" me
 
 ## Cost
 
-Apify bills per result stored — about **$3.40 / 1,000 results**. At 25 posts × 2 subreddits daily
-that is roughly **$5/month**, and `TIME_FILTER = "day"` in `config.py` keeps it there by not
-re-fetching posts already processed. Gemini usage sits inside the free tier at this volume.
+Apify bills this actor per event (rates from Apify's API, free tier):
+
+| Event | Free-tier rate |
+|---|---|
+| Result stored | **$0.004** each ($4.00 / 1,000) |
+| Actor start | **$0.02** per 1 GB of memory, per run |
+
+The actor-start fee is charged **per run regardless of how many results come back**, so a
+10-result test run costs about `10 × $0.004 + $0.02 = $0.06`, not $0.04. `APIFY_MEMORY_MBYTES`
+is pinned to 1024 in `config.py` so that fee stays at $0.02 rather than scaling with a larger
+default.
+
+Full daily production (50 results) is roughly **$0.22/day ≈ $6.60/month**. Paid Apify tiers drop
+the per-result rate to $0.0034. `TIME_FILTER = "day"` holds the volume down by not re-fetching
+posts already processed. Gemini stays inside the free tier at this volume.
+
+Use `--limit N` to cap **total** results on test runs — it's the cost lever, and the run logs the
+worst-case cost before it starts.
 
 ## Deployment
 

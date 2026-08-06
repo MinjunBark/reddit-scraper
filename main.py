@@ -28,7 +28,8 @@ def parse_args():
         "--limit",
         type=int,
         default=None,
-        help="Override posts-per-subreddit, for cheap iteration.",
+        help="Hard cap on TOTAL results fetched across all subreddits. Apify bills per "
+             "result stored, so this is the cost lever — use it for test runs.",
     )
     return parser.parse_args()
 
@@ -71,7 +72,7 @@ def main():
     log = logging.getLogger("main")
     check_env(args.dry_run)
 
-    posts = reddit_client.fetch_recent_posts(limit=args.limit)
+    posts = reddit_client.fetch_recent_posts(max_items=args.limit)
     unseen = seen_store.filter_unseen(posts)
     matched, evaluated = summarize_and_filter.summarize_and_filter(unseen)
 
