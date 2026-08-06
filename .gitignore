@@ -6,5 +6,12 @@ __pycache__/
 # Scraped Reddit content and scoring output. Kept local for inspection and never
 # committed — it is third-party user content, not ours to redistribute.
 data/
+
+# Internal strategy docs. These describe Shadowfax's ICP, positioning, and the exact
+# qualification criteria — kept out of the public repo. Nothing at runtime reads them:
+# their content is baked into config.PAIN_POINTS / NON_SIGNALS and the prompt, so the
+# pipeline runs on Railway without them.
+BUILD-INSTRUCTIONS.md
+shadowfaxai_about.md
 .venv/
 venv/
