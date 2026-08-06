@@ -30,11 +30,15 @@ APIFY_MEMORY_MBYTES = 1024
 COST_PER_RESULT_USD = 0.004
 COST_PER_START_USD = 0.02
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 
-# Free tier allows 5 requests/minute for this model. One call per post with no pacing
-# exhausts that after 5 posts and silently drops the rest, so requests are throttled to
-# this rate. Raise it if the key moves to a paid tier.
+# The free tier enforces TWO quotas, and the daily one is the binding constraint:
+#   GenerateRequestsPerMinutePerProjectPerModel-FreeTier = 5   (per minute)
+#   GenerateRequestsPerDayPerProjectPerModel-FreeTier    = 20  (per DAY)
+# One request per post cannot work here — 50 posts/day would need 50 requests against a
+# budget of 20. Batching is therefore load-bearing, not an optimization: at 15 posts per
+# request a full day costs ~4 requests.
+GEMINI_BATCH_SIZE = 15
 GEMINI_RPM = 5
 GEMINI_MAX_RETRIES = 4
 

@@ -37,9 +37,13 @@ def _retry_delay_from(error, attempt):
         return int(match.group(1)) + 1
     return min(60, 2 ** attempt)
 
-_RESPONSE_SCHEMA = {
+_VERDICT_SCHEMA = {
     "type": "object",
     "properties": {
+        "post_index": {
+            "type": "integer",
+            "description": "The index number of the post this verdict is for, as given in the input.",
+        },
         "summary": {
             "type": "string",
             "description": "1-2 sentence summary of what the poster is actually dealing with.",
@@ -58,7 +62,16 @@ _RESPONSE_SCHEMA = {
             "enum": ["high", "medium", "low"],
         },
     },
-    "required": ["summary", "matched_pain_points", "recommendation", "signal_strength"],
+    "required": [
+        "post_index", "summary", "matched_pain_points", "recommendation", "signal_strength",
+    ],
+}
+
+# Batched: the free tier limits requests per minute, not tokens, so scoring many posts in
+# one call is dramatically faster than one call per post.
+_RESPONSE_SCHEMA = {
+    "type": "array",
+    "items": _VERDICT_SCHEMA,
 }
 
 _PROMPT = """You are triaging Reddit posts to find people who have a problem that Shadowfax AI solves.
@@ -66,14 +79,27 @@ _PROMPT = """You are triaging Reddit posts to find people who have a problem tha
 Shadowfax's pain points:
 {pain_points}
 
-Judge whether this post shows someone genuinely wrestling with one of those problems. Be strict:
-match a pain point only if the poster is actually describing that difficulty, not merely mentioning
-a related word. A post that says "I'm a data analyst" is not about data prep. If nothing genuinely
-matches, return an empty matched_pain_points list — that is a normal and common outcome.
+For EACH post below, judge whether it shows someone genuinely wrestling with one of those
+problems. Be strict: match a pain point only if the poster is actually describing that
+difficulty, not merely mentioning a related word. A post that says "I'm a data analyst" is not
+about data prep. If nothing genuinely matches, return an empty matched_pain_points list — that
+is a normal outcome.
 
-signal_strength reflects how strong the buying intent is: "high" means they are actively looking for
-a better way to do this right now, "low" means the pain is incidental to their actual question.
+Do match when the poster describes doing this work manually, repetitively, or painfully, even if
+they are not explicitly asking for a tool. Someone complaining that they rebuild forecasts by
+hand every month is a match for "forecasting", not a miss.
 
+signal_strength reflects how strong the buying intent is: "high" means they are actively looking
+for a better way to do this right now, "low" means the pain is incidental to their actual question.
+
+Return exactly one verdict object per post, each carrying the post_index it corresponds to.
+Judge every post independently — do not let one post's verdict influence another's.
+
+{posts}
+"""
+
+_POST_TEMPLATE = """
+--- POST {index} ---
 Subreddit: r/{subreddit}
 Title: {title}
 Body:
@@ -89,12 +115,20 @@ def _client():
     return genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
-def _evaluate_one(client, post):
+def _evaluate_batch(client, batch):
+    """Score a batch of posts in one call. Returns {post_index: verdict}."""
+    rendered = "".join(
+        _POST_TEMPLATE.format(
+            index=i,
+            subreddit=post["subreddit"],
+            title=post["title"],
+            body=(post["selftext"][:_MAX_BODY_CHARS] or "(no body text)"),
+        )
+        for i, post in enumerate(batch)
+    )
     prompt = _PROMPT.format(
         pain_points="\n".join(f"- {p}" for p in config.PAIN_POINTS),
-        subreddit=post["subreddit"],
-        title=post["title"],
-        body=(post["selftext"][:_MAX_BODY_CHARS] or "(no body text)"),
+        posts=rendered,
     )
     last_error = None
     for attempt in range(config.GEMINI_MAX_RETRIES):
@@ -111,7 +145,15 @@ def _evaluate_one(client, post):
                     temperature=0,
                 ),
             )
-            return json.loads(response.text)
+            verdicts = json.loads(response.text)
+            # Keyed by index rather than zipped by position: the model can return
+            # verdicts out of order or omit one, and silent misalignment would attach
+            # the wrong summary to the wrong post.
+            return {
+                v["post_index"]: v
+                for v in verdicts
+                if isinstance(v, dict) and isinstance(v.get("post_index"), int)
+            }
         except Exception as error:
             last_error = error
             if "RESOURCE_EXHAUSTED" not in str(error) and "429" not in str(error):
@@ -140,23 +182,30 @@ def summarize_and_filter(posts):
     matched, evaluated = [], []
 
     total = len(posts)
-    log.info(
-        "Scoring %d posts at %d/min — expect roughly %.0f min",
-        total, config.GEMINI_RPM, total / config.GEMINI_RPM,
-    )
+    batches = [
+        posts[i : i + config.GEMINI_BATCH_SIZE]
+        for i in range(0, total, config.GEMINI_BATCH_SIZE)
+    ]
+    log.info("Scoring %d posts in %d request(s)", total, len(batches))
 
-    for index, post in enumerate(posts, start=1):
+    for batch_number, batch in enumerate(batches, start=1):
         try:
-            verdict = _evaluate_one(client, post)
+            verdicts = _evaluate_batch(client, batch)
         except Exception as error:
-            # Skipped, not marked seen — it gets another chance on the next run.
+            # Skipped, not marked seen — these get another chance on the next run.
             # Truncated: the full trace is noise in a cron log.
-            log.error("[%d/%d] failed for post %s: %s", index, total, post["id"], str(error)[:200])
+            log.error("batch %d/%d failed: %s", batch_number, len(batches), str(error)[:200])
             continue
 
-        evaluated.append(post)
-        if verdict.get("matched_pain_points"):
-            matched.append({**post, **verdict})
+        for index, post in enumerate(batch):
+            verdict = verdicts.get(index)
+            if verdict is None:
+                # Not marked evaluated, so it is retried tomorrow rather than lost.
+                log.warning("No verdict returned for post %s; will retry next run", post["id"])
+                continue
+            evaluated.append(post)
+            if verdict.get("matched_pain_points"):
+                matched.append({**post, **verdict})
 
     log.info("Evaluated %d posts, %d matched a pain point", len(evaluated), len(matched))
     return matched, evaluated
