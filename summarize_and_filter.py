@@ -7,6 +7,8 @@ malformed response loses that post, not the whole digest.
 import json
 import logging
 import os
+import re
+import time
 
 from google import genai
 from google.genai import types
@@ -14,6 +16,26 @@ from google.genai import types
 import config
 
 log = logging.getLogger(__name__)
+
+_MIN_INTERVAL_S = 60.0 / config.GEMINI_RPM
+_last_call_at = 0.0
+
+
+def _throttle():
+    """Space calls out to stay under the per-minute quota."""
+    global _last_call_at
+    wait = _MIN_INTERVAL_S - (time.monotonic() - _last_call_at)
+    if wait > 0:
+        time.sleep(wait)
+    _last_call_at = time.monotonic()
+
+
+def _retry_delay_from(error, attempt):
+    """Honour the retryDelay Gemini returns on a 429; otherwise back off exponentially."""
+    match = re.search(r"'retryDelay': '(\d+)s'", str(error))
+    if match:
+        return int(match.group(1)) + 1
+    return min(60, 2 ** attempt)
 
 _RESPONSE_SCHEMA = {
     "type": "object",
@@ -74,15 +96,34 @@ def _evaluate_one(client, post):
         title=post["title"],
         body=(post["selftext"][:_MAX_BODY_CHARS] or "(no body text)"),
     )
-    response = client.models.generate_content(
-        model=config.GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=_RESPONSE_SCHEMA,
-        ),
-    )
-    return json.loads(response.text)
+    last_error = None
+    for attempt in range(config.GEMINI_MAX_RETRIES):
+        _throttle()
+        try:
+            response = client.models.generate_content(
+                model=config.GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=_RESPONSE_SCHEMA,
+                    # Without this the same post scores differently between runs, which
+                    # moves posts in and out of the "most relevant" bold set at random.
+                    temperature=0,
+                ),
+            )
+            return json.loads(response.text)
+        except Exception as error:
+            last_error = error
+            if "RESOURCE_EXHAUSTED" not in str(error) and "429" not in str(error):
+                raise
+            delay = _retry_delay_from(error, attempt)
+            log.warning(
+                "Gemini rate limit hit (attempt %d/%d), waiting %ds",
+                attempt + 1, config.GEMINI_MAX_RETRIES, delay,
+            )
+            time.sleep(delay)
+
+    raise RuntimeError(f"Gemini rate limit not cleared after {config.GEMINI_MAX_RETRIES} attempts") from last_error
 
 
 def summarize_and_filter(posts):
@@ -98,12 +139,19 @@ def summarize_and_filter(posts):
     client = _client()
     matched, evaluated = [], []
 
-    for post in posts:
+    total = len(posts)
+    log.info(
+        "Scoring %d posts at %d/min — expect roughly %.0f min",
+        total, config.GEMINI_RPM, total / config.GEMINI_RPM,
+    )
+
+    for index, post in enumerate(posts, start=1):
         try:
             verdict = _evaluate_one(client, post)
-        except Exception:
+        except Exception as error:
             # Skipped, not marked seen — it gets another chance on the next run.
-            log.exception("Gemini evaluation failed for post %s; skipping", post["id"])
+            # Truncated: the full trace is noise in a cron log.
+            log.error("[%d/%d] failed for post %s: %s", index, total, post["id"], str(error)[:200])
             continue
 
         evaluated.append(post)

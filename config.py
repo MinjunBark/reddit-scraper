@@ -32,5 +32,11 @@ COST_PER_START_USD = 0.02
 
 GEMINI_MODEL = "gemini-2.5-flash"
 
+# Free tier allows 5 requests/minute for this model. One call per post with no pacing
+# exhausts that after 5 posts and silently drops the rest, so requests are throttled to
+# this rate. Raise it if the key moves to a paid tier.
+GEMINI_RPM = 5
+GEMINI_MAX_RETRIES = 4
+
 # Overridden on Railway to point at the mounted volume.
 SEEN_DB_PATH = os.environ.get("SEEN_DB_PATH", "seen.db")

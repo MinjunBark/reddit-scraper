@@ -93,7 +93,9 @@ def fetch_recent_posts(max_items=None):
         "startUrls": [
             {"url": f"https://www.reddit.com/r/{name}/new/"} for name in config.SUBREDDITS
         ],
-        "sort": "New",
+        # Lowercase is required — the actor's docs show display labels ("New"), not the
+        # accepted values. Valid: "", relevance, hot, top, new, rising, comments.
+        "sort": "new",
         "time": config.TIME_FILTER,
         "maxItems": max_items,
         "maxPostCount": per_sub,
@@ -114,14 +116,20 @@ def fetch_recent_posts(max_items=None):
         memory_mbytes=config.APIFY_MEMORY_MBYTES,
     )
 
-    status = run.get("status")
-    if status != "SUCCEEDED":
+    # apify-client >=2 returns a pydantic Run object; older versions returned a dict.
+    def field(obj, attr, key):
+        return getattr(obj, attr) if hasattr(obj, attr) else obj[key]
+
+    status = str(field(run, "status", "status"))
+    run_id = field(run, "id", "id")
+    if not status.endswith("SUCCEEDED"):
         raise RuntimeError(
             f"Apify run finished with status {status!r} — see "
-            f"https://console.apify.com/actors/runs/{run.get('id')}"
+            f"https://console.apify.com/actors/runs/{run_id}"
         )
 
-    raw = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    dataset_id = field(run, "default_dataset_id", "defaultDatasetId")
+    raw = list(client.dataset(dataset_id).iterate_items())
     posts = [_normalize(item) for item in raw if _is_wanted(item)]
     posts = [p for p in posts if p["id"]]
 

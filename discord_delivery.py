@@ -50,7 +50,12 @@ def _embed(post):
         "title": title[:256],
         "url": post["permalink"],
         "description": description[:MAX_DESCRIPTION_CHARS],
-        "footer": {"text": f"r/{post['subreddit']} · u/{post['author']} · {post['score']} points"},
+        # Score is omitted when absent — the Apify actor doesn't return upVotes, and a
+        # hardcoded "0 points" on every post reads as real data rather than missing data.
+        "footer": {
+            "text": f"r/{post['subreddit']} · u/{post['author']}"
+            + (f" · {post['score']} points" if post.get("score") else "")
+        },
     }
 
 
