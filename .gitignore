@@ -2,5 +2,9 @@
 __pycache__/
 *.pyc
 *.db
+
+# Scraped Reddit content and scoring output. Kept local for inspection and never
+# committed — it is third-party user content, not ours to redistribute.
+data/
 .venv/
 venv/

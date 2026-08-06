@@ -76,24 +76,35 @@ _RESPONSE_SCHEMA = {
 
 _PROMPT = """You are triaging Reddit posts to find people who have a problem that Shadowfax AI solves.
 
-Shadowfax's pain points:
+Shadowfax is an AI-native analytics platform for business analysts, FP&A managers, and consultants.
+It turns messy data into repeatable, auditable analyses without requiring Python. Its founding
+argument is that AI copilots bolted onto legacy tools did not remove analyst toil — analysts now
+spend hours *auditing* AI output instead of producing it, and under 10% of business analysts have
+adopted AI tooling, mostly because they do not trust it.
+
+Pain points to match against:
 {pain_points}
 
-For EACH post below, judge whether it shows someone genuinely wrestling with one of those
-problems. Be strict: match a pain point only if the poster is actually describing that
-difficulty, not merely mentioning a related word. A post that says "I'm a data analyst" is not
-about data prep. If nothing genuinely matches, return an empty matched_pain_points list — that
-is a normal outcome.
+These are NOT signals. Posts about them should return an empty match list, even when the poster is
+clearly an analyst or clearly frustrated:
+{non_signals}
 
-Do match when the poster describes doing this work manually, repetitively, or painfully, even if
-they are not explicitly asking for a tool. Someone complaining that they rebuild forecasts by
-hand every month is a match for "forecasting", not a miss.
+For EACH post, judge whether the poster is genuinely wrestling with one of the pain points. Match
+only if they are actually describing that difficulty, not merely mentioning a related word — "I'm a
+data analyst" is not about data prep.
 
-signal_strength reflects how strong the buying intent is: "high" means they are actively looking
-for a better way to do this right now, "low" means the pain is incidental to their actual question.
+Do match when someone describes doing this work manually, repetitively, or painfully, even if they
+never ask for a tool. Rebuilding a forecast by hand every month is a match for "forecasting".
 
-Return exactly one verdict object per post, each carrying the post_index it corresponds to.
-Judge every post independently — do not let one post's verdict influence another's.
+Do NOT match someone whose actual question is about their career, even if they mention painful
+work along the way. A post that describes tedious dashboard work but asks "should I switch jobs?"
+is a career post, not a lead — the person wants a different job, not better software.
+
+signal_strength: "high" = actively looking for a better way right now; "medium" = clear operational
+pain but not shopping; "low" = the pain is incidental to their actual question.
+
+Return exactly one verdict object per post, carrying the post_index it corresponds to. Judge every
+post independently — do not let one post's verdict influence another's.
 
 {posts}
 """
@@ -128,6 +139,7 @@ def _evaluate_batch(client, batch):
     )
     prompt = _PROMPT.format(
         pain_points="\n".join(f"- {p}" for p in config.PAIN_POINTS),
+        non_signals="\n".join(f"- {n}" for n in config.NON_SIGNALS),
         posts=rendered,
     )
     last_error = None

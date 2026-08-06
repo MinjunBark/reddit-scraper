@@ -4,6 +4,7 @@ This is the only module that knows where posts come from. It returns the same no
 dicts regardless of source, so dedup / scoring / delivery are unaffected by this swap.
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -70,6 +71,26 @@ def _is_wanted(item):
     return bool(item.get("title"))
 
 
+def _save(raw, posts, run_id):
+    """Write the run's output to DATA_DIR so it can be inspected after the fact.
+
+    Never fatal: losing a debug artifact must not fail a digest that otherwise worked.
+    """
+    try:
+        os.makedirs(config.DATA_DIR, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        for name, payload in (("raw", raw), ("normalized", posts)):
+            path = os.path.join(config.DATA_DIR, f"{stamp}_{run_id}_{name}.json")
+            with open(path, "w") as handle:
+                json.dump(payload, handle, indent=2, default=str)
+        # Stable filename so the most recent run is always at a predictable path.
+        with open(os.path.join(config.DATA_DIR, "latest_normalized.json"), "w") as handle:
+            json.dump(posts, handle, indent=2, default=str)
+        log.info("Saved run output to %s/", config.DATA_DIR)
+    except Exception as error:
+        log.warning("Could not save run output: %s", error)
+
+
 def estimate_cost(max_items):
     """Worst-case USD for one run: every capped result stored, plus the start fee."""
     return max_items * config.COST_PER_RESULT_USD + config.COST_PER_START_USD
@@ -132,6 +153,7 @@ def fetch_recent_posts(max_items=None):
     raw = list(client.dataset(dataset_id).iterate_items())
     posts = [_normalize(item) for item in raw if _is_wanted(item)]
     posts = [p for p in posts if p["id"]]
+    _save(raw, posts, run_id)
 
     log.info("Apify returned %d items, %d usable posts", len(raw), len(posts))
     for name in config.SUBREDDITS:

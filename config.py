@@ -4,6 +4,10 @@ import os
 
 SUBREDDITS = ["dataanalyst", "FPandA"]
 
+# Derived from shadowfaxai_about.md. The first six are the original list from
+# BUILD-INSTRUCTIONS.md; the rest close gaps found by reading Shadowfax's actual
+# positioning — most importantly "verifying AI output", which is their founding thesis
+# and was missing entirely.
 PAIN_POINTS = [
     "data prep",
     "data cleaning",
@@ -11,6 +15,23 @@ PAIN_POINTS = [
     "automation tools",
     "agentic tools with auditability",
     "reducing manual operations with agentic tools",
+    "distrust of AI output or the burden of verifying it",
+    "reproducibility of analysis",
+    "spreadsheet fragility at scale",
+    "BI tool rigidity or waiting on engineering",
+    "wanting analysis power without coding",
+    "data profiling and exploration toil",
+    "ad-hoc analysis request backlog",
+    "repetitive manual reporting cycles",
+]
+
+# Volume in these subreddits is dominated by career talk, and it is the main source of
+# false positives. Stated explicitly to the model rather than left to inference.
+NON_SIGNALS = [
+    "career advice, job hunting, resumes, salary, or interviews",
+    "certifications, courses, degrees, or exam prep",
+    "how to break into the field",
+    "wanting to leave the profession — venting about the job is not buying intent",
 ]
 
 POSTS_PER_SUBREDDIT = 25        # how many recent posts to pull per subreddit per run
@@ -44,3 +65,7 @@ GEMINI_MAX_RETRIES = 4
 
 # Overridden on Railway to point at the mounted volume.
 SEEN_DB_PATH = os.environ.get("SEEN_DB_PATH", "seen.db")
+
+# Every run writes its raw actor output and scored results here for inspection.
+# Gitignored — this is scraped third-party content, not ours to commit.
+DATA_DIR = os.environ.get("DATA_DIR", "data")
