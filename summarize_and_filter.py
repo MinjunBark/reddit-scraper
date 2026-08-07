@@ -224,9 +224,13 @@ def summarize_and_filter(posts):
                 # Not marked evaluated, so it is retried tomorrow rather than lost.
                 log.warning("No verdict returned for post %s; will retry next run", post["id"])
                 continue
-            evaluated.append(post)
+            # Verdicts are attached to every evaluated post, not just matches, so a
+            # rejection can be audited after the fact — otherwise there is no way to see
+            # why the filter dropped something.
+            scored = {**post, **verdict}
+            evaluated.append(scored)
             if verdict.get("matched_pain_points"):
-                matched.append({**post, **verdict})
+                matched.append(scored)
 
     log.info("Evaluated %d posts, %d matched a pain point", len(evaluated), len(matched))
     return matched, evaluated
